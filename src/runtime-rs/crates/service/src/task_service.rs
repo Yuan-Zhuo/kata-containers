@@ -10,7 +10,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use common::types::{Request, Response};
+use common::types::{TaskRequest, TaskResponse};
 use containerd_shim_protos::{api, shim_async};
 use ttrpc::{self, r#async::TtrpcContext};
 
@@ -32,10 +32,10 @@ async fn handler_message<TtrpcReq, TtrpcResp>(
     req: TtrpcReq,
 ) -> ttrpc::Result<TtrpcResp>
 where
-    Request: TryFrom<TtrpcReq>,
-    <Request as TryFrom<TtrpcReq>>::Error: std::fmt::Debug,
-    TtrpcResp: TryFrom<Response>,
-    <TtrpcResp as TryFrom<Response>>::Error: std::fmt::Debug,
+    TaskRequest: TryFrom<TtrpcReq>,
+    <TaskRequest as TryFrom<TtrpcReq>>::Error: std::fmt::Debug,
+    TtrpcResp: TryFrom<TaskResponse>,
+    <TtrpcResp as TryFrom<TaskResponse>>::Error: std::fmt::Debug,
 {
     let r = req
         .try_into()
@@ -43,7 +43,7 @@ where
     let logger = sl!().new(o!("stream id" =>  ctx.mh.stream_id));
     debug!(logger, "====> task service {:?}", &r);
     let resp = s
-        .handler_message(r)
+        .handler_task_message(r)
         .await
         .map_err(|err| ttrpc::Error::Others(format!("failed to handler message {:?}", err)))?;
     debug!(logger, "<==== task service {:?}", &resp);
