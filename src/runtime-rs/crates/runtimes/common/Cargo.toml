@@ -10,7 +10,8 @@ license = "Apache-2.0"
 [dependencies]
 anyhow = "^1.0"
 async-trait = "0.1.48"
-containerd-shim-protos = { version = "0.3.0", features = ["async"]}
+# containerd-shim-protos = { version = "0.3.0", features = ["async"]}
+containerd-shim-protos = { git = "https://github.com/containerd/rust-extensions.git", features = ["async", "sandbox"]}
 lazy_static = "1.4.0"
 nix = "0.24.2"
 protobuf = "3.2.0"

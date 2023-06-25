@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+use std::collections::{hash_map::RandomState, HashMap};
+
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -13,15 +15,37 @@ pub struct SandboxNetworkEnv {
     pub network_created: bool,
 }
 
+#[derive(Clone)]
+pub struct CreateOpt {
+    pub hostname: String,
+    pub dns: Vec<String>,
+    pub network_env: SandboxNetworkEnv,
+    pub annotations: HashMap<String, String, RandomState>,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct SandboxStatus {
+    pub sandbox_id: String,
+    pub pid: u32,
+    pub state: String,
+    pub info: std::collections::HashMap<String, String>,
+    pub create_at: std::time::Duration,
+    pub exited_at: std::time::Duration,
+}
+
 #[async_trait]
 pub trait Sandbox: Send + Sync {
-    async fn start(
+    async fn create(&self, opt: &CreateOpt) -> Result<()>;
+    async fn start(&self) -> Result<()>;
+    async fn run(
         &self,
         dns: Vec<String>,
         spec: &oci::Spec,
         state: &oci::State,
         network_env: SandboxNetworkEnv,
     ) -> Result<()>;
+    async fn status(&self) -> Result<SandboxStatus>;
+    async fn wait(&self) -> Result<()>;
     async fn stop(&self) -> Result<()>;
     async fn cleanup(&self) -> Result<()>;
     async fn shutdown(&self) -> Result<()>;

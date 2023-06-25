@@ -48,6 +48,10 @@ impl Hypervisor for Qemu {
         inner.prepare_vm(id, netns).await
     }
 
+    async fn wait_vm(&self) -> Result<()> {
+        todo!()
+    }
+
     async fn start_vm(&self, timeout: i32) -> Result<()> {
         let mut inner = self.inner.write().await;
         inner.start_vm(timeout).await

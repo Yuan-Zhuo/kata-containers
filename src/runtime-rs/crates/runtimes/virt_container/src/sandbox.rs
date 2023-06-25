@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use common::{
     message::{Action, Message},
-    Sandbox, SandboxNetworkEnv,
+    CreateOpt, Sandbox, SandboxNetworkEnv, SandboxStatus,
 };
 use containerd_shim_protos::events::task::TaskOOM;
 use hypervisor::{dragonball::Dragonball, Hypervisor, HYPERVISOR_DRAGONBALL};
@@ -25,6 +25,7 @@ use resource::{
     network::{NetworkConfig, NetworkWithNetNsConfig},
     ResourceConfig, ResourceManager,
 };
+use strum::Display;
 use tokio::sync::{mpsc::Sender, Mutex, RwLock};
 
 use crate::health_check::HealthCheck;
@@ -37,9 +38,10 @@ pub struct SandboxRestoreArgs {
     pub sender: Sender<Message>,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Display)]
 pub enum SandboxState {
     Init,
+    Created,
     Running,
     Stopped,
 }
@@ -173,7 +175,136 @@ impl VirtSandbox {
 
 #[async_trait]
 impl Sandbox for VirtSandbox {
-    async fn start(
+    async fn create(&self, opt: &CreateOpt) -> Result<()> {
+        let id = &self.sid;
+
+        // if sandbox is not in SandboxState::Init then return,
+        // otherwise try to create sandbox
+        let mut inner = self.inner.write().await;
+        if inner.state != SandboxState::Init {
+            warn!(sl!(), "sandbox is created");
+            return Ok(());
+        }
+
+        self.hypervisor
+            .prepare_vm(id, opt.network_env.netns.clone())
+            .await
+            .context("prepare vm")?;
+
+        // generate device and setup before start vm
+        // should after hypervisor.prepare_vm
+        let resources = self
+            .prepare_config_for_sandbox(id, opt.network_env.clone())
+            .await?;
+        self.resource_manager
+            .prepare_before_start_vm(resources)
+            .await
+            .context("set up device before start vm")?;
+
+        // start vm
+        self.hypervisor.start_vm(10_000).await.context("start vm")?;
+        info!(sl!(), "start vm");
+
+        // connect agent
+        // set agent socket
+        let address = self
+            .hypervisor
+            .get_agent_socket()
+            .await
+            .context("get agent socket")?;
+        self.agent.start(&address).await.context("connect")?;
+
+        self.resource_manager
+            .setup_after_start_vm()
+            .await
+            .context("setup device after start vm")?;
+
+        // create sandbox in vm
+        let agent_config = self.agent.agent_config().await;
+        let kernel_modules = KernelModule::set_kernel_modules(agent_config.kernel_modules)?;
+
+        let req = agent::CreateSandboxRequest {
+            hostname: opt.hostname.clone(),
+            dns: opt.dns.clone(),
+            storages: self
+                .resource_manager
+                .get_storage_for_sandbox()
+                .await
+                .context("get storages for sandbox")?,
+            sandbox_pidns: false,
+            sandbox_id: self.sid.clone(),
+            guest_hook_path: self
+                .hypervisor
+                .hypervisor_config()
+                .await
+                .security_info
+                .guest_hook_path,
+            kernel_modules,
+        };
+
+        self.agent
+            .create_sandbox(req)
+            .await
+            .context("create sandbox")?;
+
+        inner.state = SandboxState::Created;
+
+        Ok(())
+    }
+
+    async fn start(&self) -> Result<()> {
+        let id = &self.sid;
+
+        // if sandbox running, return
+        // otherwise try to create sandbox
+        let mut inner = self.inner.write().await;
+        if inner.state != SandboxState::Created {
+            warn!(sl!(), "sandbox is started, no need to start");
+            return Ok(());
+        }
+
+        let agent = self.agent.clone();
+        let sender = self.msg_sender.clone();
+        info!(sl!(), "oom watcher start");
+        tokio::spawn(async move {
+            loop {
+                match agent
+                    .get_oom_event(agent::Empty::new())
+                    .await
+                    .context("get oom event")
+                {
+                    Ok(resp) => {
+                        let cid = &resp.container_id;
+                        warn!(sl!(), "send oom event for container {}", &cid);
+                        let event = TaskOOM {
+                            container_id: cid.to_string(),
+                            ..Default::default()
+                        };
+                        let msg = Message::new(Action::Event(Arc::new(event)));
+                        let lock_sender = sender.lock().await;
+                        if let Err(err) = lock_sender.send(msg).await.context("send event") {
+                            error!(
+                                sl!(),
+                                "failed to send oom event for {} error {:?}", cid, err
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        warn!(sl!(), "failed to get oom event error {:?}", err);
+                        break;
+                    }
+                }
+            }
+        });
+        self.monitor.start(id, self.agent.clone());
+        inner.state = SandboxState::Running;
+
+        self.save().await.context("save state")?;
+
+        Ok(())
+    }
+
+    async fn run(
         &self,
         dns: Vec<String>,
         spec: &oci::Spec,
@@ -317,6 +448,25 @@ impl Sandbox for VirtSandbox {
         });
         self.monitor.start(id, self.agent.clone());
         self.save().await.context("save state")?;
+        Ok(())
+    }
+
+    async fn status(&self) -> Result<SandboxStatus> {
+        info!(sl!(), "get sandbox status");
+        let inner = self.inner.read().await;
+        let state = inner.state.to_string();
+
+        Ok(SandboxStatus {
+            sandbox_id: self.sid.clone(),
+            pid: std::process::id(),
+            state,
+            ..Default::default()
+        })
+    }
+
+    async fn wait(&self) -> Result<()> {
+        info!(sl!(), "wait sandbox");
+        self.hypervisor.wait_vm().await.context("wait vm")?;
         Ok(())
     }
 
