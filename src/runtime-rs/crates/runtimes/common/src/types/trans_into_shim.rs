@@ -11,9 +11,9 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use containerd_shim_protos::api;
+use containerd_shim_protos::{api, sandbox_api};
 
-use super::{ProcessExitStatus, ProcessStateInfo, ProcessStatus, TaskResponse};
+use super::{ProcessExitStatus, ProcessStateInfo, ProcessStatus, SandboxResponse, TaskResponse};
 use crate::error::Error;
 
 fn system_time_into(time: time::SystemTime) -> ::protobuf::well_known_types::timestamp::Timestamp {
@@ -34,6 +34,133 @@ fn option_system_time_into(
     match time {
         Some(v) => ::protobuf::MessageField::some(system_time_into(v)),
         None => ::protobuf::MessageField::none(),
+    }
+}
+
+impl TryFrom<SandboxResponse> for sandbox_api::CreateSandboxResponse {
+    type Error = anyhow::Error;
+    fn try_from(from: SandboxResponse) -> Result<Self> {
+        match from {
+            SandboxResponse::CreateSandbox => Ok(Self::new()),
+            _ => Err(anyhow!(Error::UnexpectedSandboxResponse(
+                from,
+                type_name::<Self>().to_string()
+            ))),
+        }
+    }
+}
+
+impl TryFrom<SandboxResponse> for sandbox_api::StartSandboxResponse {
+    type Error = anyhow::Error;
+    fn try_from(from: SandboxResponse) -> Result<Self> {
+        match from {
+            SandboxResponse::StartSandbox(resp) => Ok(Self {
+                pid: resp.pid,
+                created_at: option_system_time_into(resp.create_time),
+                ..Default::default()
+            }),
+            _ => Err(anyhow!(Error::UnexpectedSandboxResponse(
+                from,
+                type_name::<Self>().to_string()
+            ))),
+        }
+    }
+}
+
+impl TryFrom<SandboxResponse> for sandbox_api::PlatformResponse {
+    type Error = anyhow::Error;
+    fn try_from(from: SandboxResponse) -> Result<Self> {
+        match from {
+            SandboxResponse::Platform(resp) => {
+                let mut sandbox_resp = Self::new();
+                sandbox_resp.mut_platform().set_os(resp.os);
+                sandbox_resp
+                    .mut_platform()
+                    .set_architecture(resp.architecture);
+
+                Ok(sandbox_resp)
+            }
+            _ => Err(anyhow!(Error::UnexpectedSandboxResponse(
+                from,
+                type_name::<Self>().to_string()
+            ))),
+        }
+    }
+}
+
+impl TryFrom<SandboxResponse> for sandbox_api::StopSandboxResponse {
+    type Error = anyhow::Error;
+    fn try_from(from: SandboxResponse) -> Result<Self> {
+        match from {
+            SandboxResponse::StopSandbox => Ok(Self::new()),
+            _ => Err(anyhow!(Error::UnexpectedSandboxResponse(
+                from,
+                type_name::<Self>().to_string()
+            ))),
+        }
+    }
+}
+
+impl TryFrom<SandboxResponse> for sandbox_api::WaitSandboxResponse {
+    type Error = anyhow::Error;
+    fn try_from(from: SandboxResponse) -> Result<Self> {
+        match from {
+            SandboxResponse::WaitSandbox(resp) => Ok(Self {
+                exit_status: resp.exit_status,
+                exited_at: option_system_time_into(resp.exited_at),
+                ..Default::default()
+            }),
+            _ => Err(anyhow!(Error::UnexpectedSandboxResponse(
+                from,
+                type_name::<Self>().to_string()
+            ))),
+        }
+    }
+}
+
+impl TryFrom<SandboxResponse> for sandbox_api::SandboxStatusResponse {
+    type Error = anyhow::Error;
+    fn try_from(from: SandboxResponse) -> Result<Self> {
+        match from {
+            SandboxResponse::SandboxStatus(resp) => Ok(Self {
+                sandbox_id: resp.sandbox_id,
+                pid: resp.pid,
+                state: resp.state,
+                created_at: option_system_time_into(resp.created_at),
+                exited_at: option_system_time_into(resp.exited_at),
+                ..Default::default()
+            }),
+            _ => Err(anyhow!(Error::UnexpectedSandboxResponse(
+                from,
+                type_name::<Self>().to_string()
+            ))),
+        }
+    }
+}
+
+impl TryFrom<SandboxResponse> for sandbox_api::PingResponse {
+    type Error = anyhow::Error;
+    fn try_from(from: SandboxResponse) -> Result<Self> {
+        match from {
+            SandboxResponse::Ping => Ok(Self::new()),
+            _ => Err(anyhow!(Error::UnexpectedSandboxResponse(
+                from,
+                type_name::<Self>().to_string()
+            ))),
+        }
+    }
+}
+
+impl TryFrom<SandboxResponse> for sandbox_api::ShutdownSandboxResponse {
+    type Error = anyhow::Error;
+    fn try_from(from: SandboxResponse) -> Result<Self> {
+        match from {
+            SandboxResponse::ShutdownSandbox => Ok(Self::new()),
+            _ => Err(anyhow!(Error::UnexpectedSandboxResponse(
+                from,
+                type_name::<Self>().to_string()
+            ))),
+        }
     }
 }
 
@@ -98,7 +225,7 @@ impl TryFrom<TaskResponse> for api::CreateTaskResponse {
                 pid: resp.pid,
                 ..Default::default()
             }),
-            _ => Err(anyhow!(Error::UnexpectedResponse(
+            _ => Err(anyhow!(Error::UnexpectedTaskResponse(
                 from,
                 type_name::<Self>().to_string()
             ))),
@@ -111,7 +238,7 @@ impl TryFrom<TaskResponse> for api::DeleteResponse {
     fn try_from(from: TaskResponse) -> Result<Self> {
         match from {
             TaskResponse::DeleteProcess(resp) => Ok(resp.into()),
-            _ => Err(anyhow!(Error::UnexpectedResponse(
+            _ => Err(anyhow!(Error::UnexpectedTaskResponse(
                 from,
                 type_name::<Self>().to_string()
             ))),
@@ -124,7 +251,7 @@ impl TryFrom<TaskResponse> for api::WaitResponse {
     fn try_from(from: TaskResponse) -> Result<Self> {
         match from {
             TaskResponse::WaitProcess(resp) => Ok(resp.into()),
-            _ => Err(anyhow!(Error::UnexpectedResponse(
+            _ => Err(anyhow!(Error::UnexpectedTaskResponse(
                 from,
                 type_name::<Self>().to_string()
             ))),
@@ -140,7 +267,7 @@ impl TryFrom<TaskResponse> for api::StartResponse {
                 pid: resp.pid,
                 ..Default::default()
             }),
-            _ => Err(anyhow!(Error::UnexpectedResponse(
+            _ => Err(anyhow!(Error::UnexpectedTaskResponse(
                 from,
                 type_name::<Self>().to_string()
             ))),
@@ -153,7 +280,7 @@ impl TryFrom<TaskResponse> for api::StateResponse {
     fn try_from(from: TaskResponse) -> Result<Self> {
         match from {
             TaskResponse::StateProcess(resp) => Ok(resp.into()),
-            _ => Err(anyhow!(Error::UnexpectedResponse(
+            _ => Err(anyhow!(Error::UnexpectedTaskResponse(
                 from,
                 type_name::<Self>().to_string()
             ))),
@@ -175,7 +302,7 @@ impl TryFrom<TaskResponse> for api::StatsResponse {
                 }
                 Ok(response)
             }
-            _ => Err(anyhow!(Error::UnexpectedResponse(
+            _ => Err(anyhow!(Error::UnexpectedTaskResponse(
                 from,
                 type_name::<Self>().to_string()
             ))),
@@ -196,7 +323,7 @@ impl TryFrom<TaskResponse> for api::PidsResponse {
                 res.set_processes(processes);
                 Ok(res)
             }
-            _ => Err(anyhow!(Error::UnexpectedResponse(
+            _ => Err(anyhow!(Error::UnexpectedTaskResponse(
                 from,
                 type_name::<Self>().to_string()
             ))),
@@ -213,7 +340,7 @@ impl TryFrom<TaskResponse> for api::ConnectResponse {
                 res.set_shim_pid(resp.pid);
                 Ok(res)
             }
-            _ => Err(anyhow!(Error::UnexpectedResponse(
+            _ => Err(anyhow!(Error::UnexpectedTaskResponse(
                 from,
                 type_name::<Self>().to_string()
             ))),
@@ -233,7 +360,7 @@ impl TryFrom<TaskResponse> for api::Empty {
             TaskResponse::ResumeContainer => Ok(api::Empty::new()),
             TaskResponse::ResizeProcessPTY => Ok(api::Empty::new()),
             TaskResponse::UpdateContainer => Ok(api::Empty::new()),
-            _ => Err(anyhow!(Error::UnexpectedResponse(
+            _ => Err(anyhow!(Error::UnexpectedTaskResponse(
                 from,
                 type_name::<Self>().to_string()
             ))),

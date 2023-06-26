@@ -21,6 +21,3 @@ logging = { path = "../../../libs/logging"}
 shim-interface = { path = "../../../libs/shim-interface" }
 runtimes = { path = "../runtimes" }
 persist = { path = "../persist" }
-
-[build-dependencies]
-protobuf-codegen = "3.2.0"

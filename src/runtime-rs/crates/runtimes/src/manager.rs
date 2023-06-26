@@ -9,8 +9,11 @@ use std::{path::PathBuf, str::from_utf8, sync::Arc};
 use anyhow::{anyhow, Context, Result};
 use common::{
     message::Message,
-    types::{TaskRequest, TaskResponse},
-    CreateOpt, RuntimeHandler, RuntimeInstance, Sandbox, SandboxNetworkEnv, SandboxStatus,
+    types::{
+        PlatformInfo, SandboxExitInfo, SandboxRequest, SandboxResponse, SandboxStatusInfo,
+        StartSandboxInfo, TaskRequest, TaskResponse,
+    },
+    CreateOpt, RuntimeHandler, RuntimeInstance, Sandbox, SandboxNetworkEnv,
 };
 use hypervisor::Param;
 use kata_sys_util::spec::load_oci_spec;
@@ -23,6 +26,7 @@ use netns_rs::NetNs;
 use persist::sandbox_persist::Persist;
 use resource::{cpu_mem::initial_size::InitialSizeManager, network::generate_netns_name};
 use shim_interface::shim_mgmt::ERR_NO_SHIM_SERVER;
+use std::time::SystemTime;
 use tokio::fs;
 use tokio::sync::{mpsc::Sender, RwLock};
 #[cfg(feature = "virt")]
@@ -51,7 +55,7 @@ impl RuntimeHandlerManagerInner {
         })
     }
 
-    pub async fn init_for_sandbox_api(&mut self, opt: &CreateOpt) -> Result<()> {
+    pub async fn init_sandboxed_runtime_handler(&mut self, opt: &CreateOpt) -> Result<()> {
         if self.runtime_instance.is_some() {
             info!(sl!(), "runtime handler has been created for sandbox api.");
             return Ok(());
@@ -106,19 +110,6 @@ impl RuntimeHandlerManagerInner {
 
         tokio::task::spawn(Arc::new(shim_mgmt_svr).run());
         info!(sl!(), "shim management http server starts");
-
-        Ok(())
-    }
-
-    pub async fn start_for_sandbox_api(&mut self) -> Result<()> {
-        self.runtime_instance
-            .as_mut()
-            .ok_or("no runtime instance")
-            .map_err(|e| anyhow!(e))?
-            .sandbox
-            .start()
-            .await
-            .context("start sandbox")?;
 
         Ok(())
     }
@@ -325,14 +316,36 @@ impl RuntimeHandlerManager {
         inner.try_init(spec, state, options).await
     }
 
-    pub async fn sandbox_api_create(&self, opt: &CreateOpt) -> Result<()> {
+    async fn try_init_sandboxed_runtime_instance(&self, opt: &CreateOpt) -> Result<()> {
         let mut inner = self.inner.write().await;
-        inner.init_for_sandbox_api(opt).await
+        inner.init_sandboxed_runtime_handler(opt).await
     }
 
-    pub async fn sandbox_api_start(&self) -> Result<()> {
-        let mut inner = self.inner.write().await;
-        inner.start_for_sandbox_api().await
+    pub async fn handler_sandbox_message(&self, req: SandboxRequest) -> Result<SandboxResponse> {
+        if let SandboxRequest::CreateSandbox(sandbox_config) = req {
+            let dns: Vec<String> = Default::default();
+            let network_env = SandboxNetworkEnv {
+                netns: Some(sandbox_config.netns_path),
+                network_created: false,
+            };
+
+            let opt = CreateOpt {
+                hostname: sandbox_config.hostname,
+                dns,
+                network_env,
+                annotations: sandbox_config.annotations,
+            };
+
+            self.try_init_sandboxed_runtime_instance(&opt)
+                .await
+                .context("init sandboxed runtime instance")?;
+
+            Ok(SandboxResponse::CreateSandbox)
+        } else {
+            self.handler_sandbox_request(req)
+                .await
+                .context("handler request")
+        }
     }
 
     pub async fn handler_task_message(&self, req: TaskRequest) -> Result<TaskResponse> {
@@ -369,53 +382,64 @@ impl RuntimeHandlerManager {
 
             Ok(TaskResponse::CreateContainer(shim_pid))
         } else {
-            self.handler_request(req).await.context("handler request")
+            self.handler_task_request(req)
+                .await
+                .context("handler request")
         }
     }
 
-    pub async fn sandbox_api_shutdown(&self) -> Result<()> {
+    pub async fn handler_sandbox_request(&self, req: SandboxRequest) -> Result<SandboxResponse> {
         let instance = self
             .get_runtime_instance()
             .await
             .context("get runtime instance")?;
         let sandbox = instance.sandbox.clone();
-        sandbox.shutdown().await.context("do shutdown")?;
 
-        Ok(())
+        match req {
+            SandboxRequest::CreateSandbox(req) => Err(anyhow!("Unreachable request {:?}", req)),
+            SandboxRequest::StartSandbox(_) => {
+                sandbox.start().await.context("start sandbox")?;
+
+                Ok(SandboxResponse::StartSandbox(StartSandboxInfo {
+                    pid: std::process::id(),
+                    create_time: Some(SystemTime::now()),
+                }))
+            }
+            SandboxRequest::Platform(_) => Ok(SandboxResponse::Platform(PlatformInfo {
+                os: std::env::consts::OS.to_string(),
+                architecture: std::env::consts::ARCH.to_string(),
+            })),
+            SandboxRequest::StopSandbox(_) => {
+                sandbox.stop().await.context("stop sandbox")?;
+
+                Ok(SandboxResponse::StopSandbox)
+            }
+            SandboxRequest::WaitSandbox(_) => {
+                sandbox.wait().await.context("wait sandbox")?;
+
+                Ok(SandboxResponse::WaitSandbox(SandboxExitInfo::default()))
+            }
+            SandboxRequest::SandboxStatus(_) => {
+                let status = sandbox.status().await?;
+
+                Ok(SandboxResponse::SandboxStatus(SandboxStatusInfo {
+                    sandbox_id: status.sandbox_id,
+                    pid: status.pid,
+                    state: status.state,
+                    created_at: SystemTime::UNIX_EPOCH.checked_add(status.create_at),
+                    exited_at: SystemTime::UNIX_EPOCH.checked_add(status.exited_at),
+                }))
+            }
+            SandboxRequest::Ping(_) => Ok(SandboxResponse::Ping),
+            SandboxRequest::ShutdownSandbox(_) => {
+                sandbox.shutdown().await.context("shutdown sandbox")?;
+
+                Ok(SandboxResponse::ShutdownSandbox)
+            }
+        }
     }
 
-    pub async fn sandbox_api_stop(&self) -> Result<()> {
-        let instance = self
-            .get_runtime_instance()
-            .await
-            .context("get runtime instance")?;
-        let sandbox = instance.sandbox.clone();
-        sandbox.stop().await.context("stop sandbox")?;
-
-        Ok(())
-    }
-
-    pub async fn sandbox_api_status(&self) -> Result<SandboxStatus> {
-        let instance = self
-            .get_runtime_instance()
-            .await
-            .context("get runtime instance")?;
-        let sandbox = instance.sandbox.clone();
-        let status = sandbox.status().await?;
-        Ok(status)
-    }
-
-    pub async fn sandbox_api_wait(&self) -> Result<()> {
-        let instance = self
-            .get_runtime_instance()
-            .await
-            .context("get runtime instance")?;
-        let sandbox = instance.sandbox.clone();
-        sandbox.wait().await?;
-        Ok(())
-    }
-
-    pub async fn handler_request(&self, req: TaskRequest) -> Result<TaskResponse> {
+    pub async fn handler_task_request(&self, req: TaskRequest) -> Result<TaskResponse> {
         let instance = self
             .get_runtime_instance()
             .await

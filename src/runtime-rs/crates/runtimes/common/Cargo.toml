@@ -28,3 +28,5 @@ kata-sys-util = { path = "../../../../libs/kata-sys-util" }
 kata-types = { path = "../../../../libs/kata-types" }
 oci = { path = "../../../../libs/oci" }
 
+[build-dependencies]
+protobuf-codegen = "3.2.0"
