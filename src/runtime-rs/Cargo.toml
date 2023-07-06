@@ -4,5 +4,3 @@ members = [
     "crates/shim-ctl",
 ]
 
-[patch.'crates-io']
-containerd-shim-protos = { path = "/home/wanglei01/dev/open/rust-extensions/crates/shim-protos" }

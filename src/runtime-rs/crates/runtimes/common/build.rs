@@ -1,6 +1,5 @@
 use protobuf_codegen::Codegen;
 
-
 fn main() {
     Codegen::new()
         .pure()

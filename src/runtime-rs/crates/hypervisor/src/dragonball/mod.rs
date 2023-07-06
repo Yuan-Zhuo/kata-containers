@@ -14,18 +14,18 @@ pub mod vmm_instance;
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use kata_types::capabilities::Capabilities;
 use kata_types::config::hypervisor::Hypervisor as HypervisorConfig;
-use tokio::sync::{mpsc, RwLock, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 use crate::{DeviceType, Hypervisor, VcpuThreadIds};
 
 #[derive(Debug)]
 pub struct Dragonball {
     inner: Arc<RwLock<DragonballInner>>,
-    waiter: Mutex<mpsc::Receiver<()>>,
+    waiter: Mutex<mpsc::Receiver<i32>>,
 }
 
 impl Default for Dragonball {
@@ -56,10 +56,14 @@ impl Hypervisor for Dragonball {
         inner.prepare_vm(id, netns).await
     }
 
-    async fn wait_vm(&self) -> Result<()> {
-        let mut tx = self.waiter.lock().await;
-        tx.recv().await;
-        Ok(())
+    async fn wait_vm(&self) -> Result<i32> {
+        let mut rx = self.waiter.lock().await;
+        let exit_code = rx
+            .recv()
+            .await
+            .ok_or("no exit_code config for CH")
+            .map_err(|e| anyhow!(e))?;
+        Ok(exit_code)
     }
 
     async fn start_vm(&self, timeout: i32) -> Result<()> {
@@ -177,7 +181,7 @@ impl Persist for Dragonball {
         _hypervisor_args: Self::ConstructorArgs,
         hypervisor_state: Self::State,
     ) -> Result<Self> {
-        let (tx, rx) = mpsc::channel(1);
+        let (tx, rx) = mpsc::channel::<i32>(1);
         let inner = DragonballInner::restore(tx, hypervisor_state).await?;
         Ok(Self {
             inner: Arc::new(RwLock::new(inner)),

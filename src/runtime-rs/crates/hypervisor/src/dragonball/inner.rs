@@ -69,7 +69,7 @@ pub struct DragonballInner {
 }
 
 impl DragonballInner {
-    pub fn new(tx: mpsc::Sender<()>) -> DragonballInner {
+    pub fn new(tx: mpsc::Sender<i32>) -> DragonballInner {
         let mut capabilities = Capabilities::new();
         capabilities.set(
             CapabilityBits::BlockDeviceSupport
@@ -388,7 +388,7 @@ impl DragonballInner {
 #[async_trait]
 impl Persist for DragonballInner {
     type State = HypervisorState;
-    type ConstructorArgs = mpsc::Sender<()>;
+    type ConstructorArgs = mpsc::Sender<i32>;
 
     /// Save a state of hypervisor
     async fn save(&self) -> Result<Self::State> {

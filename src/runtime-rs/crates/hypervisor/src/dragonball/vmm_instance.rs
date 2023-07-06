@@ -24,8 +24,8 @@ use dragonball::{
 };
 use nix::sched::{setns, CloneFlags};
 use seccompiler::BpfProgram;
-use vmm_sys_util::eventfd::EventFd;
 use tokio::sync::mpsc;
+use vmm_sys_util::eventfd::EventFd;
 
 use crate::ShareFsOperation;
 
@@ -45,12 +45,12 @@ pub struct VmmInstance {
     from_vmm: Option<Receiver<VmmResponse>>,
     to_vmm_fd: EventFd,
     seccomp: BpfProgram,
-    vmm_thread: Option<thread::JoinHandle<Result<i32>>>, 
-    tx: Option<mpsc::Sender<()>>,
+    vmm_thread: Option<thread::JoinHandle<Result<i32>>>,
+    tx: Option<mpsc::Sender<i32>>,
 }
 
 impl VmmInstance {
-    pub fn new(id: &str, tx: mpsc::Sender<()>) -> Self {
+    pub fn new(id: &str, tx: mpsc::Sender<i32>) -> Self {
         let vmm_shared_info = Arc::new(RwLock::new(InstanceInfo::new(
             String::from(id),
             DRAGONBALL_VERSION.to_string(),
@@ -144,9 +144,11 @@ impl VmmInstance {
                             Vmm::run_vmm_event_loop(Arc::new(Mutex::new(vmm)), vmm_service);
                         debug!(sl!(), "run vmm thread exited: {}", exit_code);
 
-                        tx.blocking_send(()).map_err(|e| {
-                            error!(sl!(), "vmm-master thread fail to send. {:?}", e);
-                        }).ok();
+                        tx.blocking_send(exit_code)
+                            .map_err(|e| {
+                                error!(sl!(), "vmm-master thread fail to send. {:?}", e);
+                            })
+                            .ok();
 
                         Ok(exit_code)
                     }()

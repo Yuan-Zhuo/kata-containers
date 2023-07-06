@@ -12,4 +12,5 @@ mod runtime_handler;
 pub use runtime_handler::{RuntimeHandler, RuntimeInstance};
 mod sandbox;
 pub use sandbox::{Sandbox, SandboxNetworkEnv, SandboxStatus};
+mod protos;
 pub mod types;

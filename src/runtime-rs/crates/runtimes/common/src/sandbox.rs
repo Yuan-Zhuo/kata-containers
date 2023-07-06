@@ -7,14 +7,12 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-#[derive(Clone)]
+use crate::types::{SandboxConfig, SandboxExitInfo};
+
+#[derive(Clone, Debug)]
 pub struct SandboxNetworkEnv {
     pub netns: Option<String>,
     pub network_created: bool,
-}
-
-pub struct SandboxResource {
-    pub network: SandboxNetworkEnv,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -29,22 +27,10 @@ pub struct SandboxStatus {
 
 #[async_trait]
 pub trait Sandbox: Send + Sync {
-    async fn create(&self, network_env: SandboxNetworkEnv) -> Result<()> {
-        Ok(())
-    }
-    async fn status(&self) -> Result<SandboxStatus> {
-        Ok(SandboxStatus::default())
-    }
-    async fn wait(&self) -> Result<()> {
-        Ok(())
-    }
-    async fn start(
-        &self,
-        dns: Vec<String>,
-        spec: &oci::Spec,
-        state: &oci::State,
-        network_env: SandboxNetworkEnv,
-    ) -> Result<()>;
+    async fn create(&self, sandbox_config: SandboxConfig) -> Result<()>;
+    async fn start(&self) -> Result<()>;
+    async fn status(&self) -> Result<SandboxStatus>;
+    async fn wait(&self) -> Result<SandboxExitInfo>;
     async fn stop(&self) -> Result<()>;
     async fn cleanup(&self) -> Result<()>;
     async fn shutdown(&self) -> Result<()>;

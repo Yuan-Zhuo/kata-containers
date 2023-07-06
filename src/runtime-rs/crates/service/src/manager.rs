@@ -34,7 +34,7 @@ use shim_interface::KATA_PATH;
 pub struct ServiceManager {
     receiver: Option<Receiver<Message>>,
     handler: Arc<RuntimeHandlerManager>,
-    task_server: Option<Server>,
+    server: Option<Server>,
     binary: String,
     address: String,
     namespace: String,
@@ -95,12 +95,12 @@ impl ServiceManager {
                 .await
                 .context("new runtime handler")?,
         );
-        let mut task_server = unsafe { Server::from_raw_fd(server_fd) };
-        task_server = task_server.set_domain_unix();
+        let mut server = unsafe { Server::from_raw_fd(server_fd) };
+        server = server.set_domain_unix();
         Ok(Self {
             receiver: Some(receiver),
             handler,
-            task_server: Some(task_server),
+            server: Some(server),
             binary: containerd_binary.to_string(),
             address: address.to_string(),
             namespace: namespace.to_string(),
@@ -174,11 +174,10 @@ impl ServiceManager {
         let task_service = Arc::new(Box::new(TaskService::new(self.handler.clone()))
             as Box<dyn shim_async::Task + Send + Sync>);
 
-        let sandbox_service = Arc::new(
-            Box::new(SandboxService::new(self.handler.clone())) as Box<dyn sandbox_async::Sandbox + Send + Sync>
-        );
+        let sandbox_service = Arc::new(Box::new(SandboxService::new(self.handler.clone()))
+            as Box<dyn sandbox_async::Sandbox + Send + Sync>);
 
-        let server = self.task_server.take();
+        let server = self.server.take();
         let server = match server {
             Some(t) => {
                 let t = t.register_service(shim_async::create_task(task_service));
@@ -188,20 +187,20 @@ impl ServiceManager {
             }
             None => None,
         };
-        self.task_server = server;
+        self.server = server;
         Ok(())
     }
 
     async fn stop_listen(&mut self) -> Result<()> {
-        let task_server = self.task_server.take();
-        let task_server = match task_server {
+        let server = self.server.take();
+        let server = match server {
             Some(mut t) => {
                 t.stop_listen().await;
                 Some(t)
             }
             None => None,
         };
-        self.task_server = task_server;
+        self.server = server;
         Ok(())
     }
 }

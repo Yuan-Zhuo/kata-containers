@@ -11,6 +11,5 @@ logging::logger_with_subsystem!(sl, "service");
 
 mod manager;
 pub use manager::ServiceManager;
-mod protos;
 mod sandbox_service;
 mod task_service;
